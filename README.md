@@ -39,14 +39,44 @@ import { dtirToDocx } from '@shuji-bonji/dtir-ooxml-writer-mcp/writer';
 const out = await dtirToDocx(translatedDtir, originalBuf, { onMissingTranslation: 'keep' });
 ```
 
+## MCP サーバとして接続
+
+ビルド（**build 時だけ** `doc-translation-ir` を隣に置く。実行時は型のみ依存で不要）:
+
+```sh
+git clone https://github.com/shuji-bonji/doc-translation-ir.git
+git clone https://github.com/shuji-bonji/dtir-ooxml-writer-mcp.git
+cd dtir-ooxml-writer-mcp && npm install && npm run build   # → dist/index.js
+```
+
+### Claude Desktop（`claude_desktop_config.json`）
+
+```jsonc
+{
+  "mcpServers": {
+    "dtir-ooxml-writer": {
+      "command": "node",
+      "args": ["/ABS/PATH/dtir-ooxml-writer-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+### Claude Code
+
+```sh
+claude mcp add dtir-ooxml-writer -- node /ABS/PATH/dtir-ooxml-writer-mcp/dist/index.js
+```
+
+提供ツール: **`dtir_to_docx`**（翻訳済み DTIR ＋ 元 docx → 訳 docx）
+
 ## テスト
 
 - `npm test` — vitest（主要不変条件）
-- `npm run test:roundtrip` — reader と対の往復受け入れテスト:
-  reader→擬似翻訳→writer→（訳文注入 / フィールド・数値・sectPr 不可触 / collapse /
-  再 reader で構造保持 / **LibreOffice で pdf 化＝Word 互換**）
+- `npm run test:roundtrip` — 同梱の静的 DTIR フィクスチャ（reader 出力）を入力にした受け入れテスト:
+  擬似翻訳→writer→（訳文注入 / フィールド・数値・sectPr 不可触 / collapse /
+  **LibreOffice で pdf 化＝Word 互換**）。reader↔writer の本物往復は `dtir-docx-pipeline`。
 
 ## PoC の注意
 
-DTIR 型は `src/dtir.ts` にローカル複製（正本は `doc-translation-ir`）。
-往復テストで JSON Schema＋validate-dtir 検証するためドリフトは検出される。
+DTIR 型は `@shuji-bonji/doc-translation-ir` に依存（共有契約）。
