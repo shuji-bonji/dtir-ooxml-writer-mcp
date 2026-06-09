@@ -1,119 +1,88 @@
 /**
- * roundtrip — dtir-ooxml-writer-mcp の受け入れテスト（reader と対）
+ * writer acceptance — dtirToDocx を「静的 DTIR フィクスチャ」で検証（reader 非依存）
  *
- *   fixture.docx --reader--> DTIR --擬似翻訳--> DTIR' --writer--> 訳.docx
+ * 入力は doc-translation-ir 同梱の reader 出力 DTIR ＋ 元 docx。reader を実行しないので
+ * このリポジトリは contract(doc-translation-ir) だけに依存する。
+ * reader→translate→writer の本物 end-to-end は dtir-docx-pipeline リポジトリに在る。
  *
- * 検証:
- *  1. 訳文が translatable な w:t に注入されている
- *  2. 非 translatable（フィールドキャッシュ/数値）と構造（sectPr）は不可触
- *  3. ラン分断は collapse（先頭ランに集約、残りは空＝原文片が消える）
- *  4. 出力が valid zip / 全 XML well-formed（再 reader で確認）
- *  5. 再 reader 出力が validate-dtir を通る（構造保持）
- *  6. LibreOffice が訳 docx を pdf 化できる（Word 互換の妥当性）
+ * 検証: 訳文注入 / フィールド・数値・sectPr 不可触 / collapse（空ラン生成） /
+ *       valid zip / LibreOffice で pdf 化（Word 互換）。
  *
  * 実行: tsx test/roundtrip.ts
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
+import { join } from 'node:path';
 import JSZip from 'jszip';
-import { docxToDtir } from '../../dtir-ooxml-reader-mcp/src/reader.js';
-import { validateDtir } from '../../doc-translation-ir/tools/validate-dtir.js';
+import { fixtureDocxPath, readerDtirPath } from '@shuji-bonji/doc-translation-ir/fixtures';
+import type { IRDocument } from '@shuji-bonji/doc-translation-ir';
 import { dtirToDocx } from '../src/writer.js';
-import type { IRDocument } from '../src/dtir.js';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..', '..');
-const irRoot = resolve(repoRoot, 'doc-translation-ir');
-const fixtureDocx = resolve(irRoot, 'fixtures/docx/mixed-nl-fr-de-tricky.docx');
-const schemaPath = resolve(irRoot, 'schema/dtir-0.1.schema.json');
 
 const GREEN = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const RED = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const mark = (s: string) => `EN〔${s}〕`;
+/** 空 w:t（self-closing か空タグ）の数＝collapse で潰れたラン数。 */
+const emptyWtCount = (xml: string) =>
+  (xml.match(/<w:t\b[^>]*\/>|<w:t\b[^>]*><\/w:t>/g) ?? []).length;
 
 async function partText(buf: Buffer, part: string): Promise<string> {
   const zip = await JSZip.loadAsync(buf);
-  const f = zip.file(part);
-  return f ? f.async('string') : '';
+  return (await zip.file(part)?.async('string')) ?? '';
 }
 
 async function main(): Promise<void> {
-  const orig = readFileSync(fixtureDocx);
-  const failures: string[] = [];
-  const ok = (cond: boolean, msg: string) => {
-    if (!cond) failures.push(msg);
-  };
-
-  // reader → DTIR
-  const dtir = await docxToDtir(orig, { fileName: 'mixed-nl-fr-de-tricky.docx', targetLang: 'en-GB' });
+  const orig = readFileSync(fixtureDocxPath);
+  const dtir = JSON.parse(readFileSync(readerDtirPath, 'utf8')) as IRDocument;
 
   // 擬似翻訳（translatable のみ）
-  const expected = new Map<string, string>();
   for (const seg of dtir.segments) {
-    if (!seg.translatable) continue;
-    const text = mark(seg.text.source);
-    expected.set(seg.id, text);
-    seg.translation = {
-      text,
-      engine: 'pseudo',
-      sourceLangUsed: seg.language.value,
-      targetLang: 'en-GB',
-      at: new Date().toISOString(),
-    };
+    if (seg.translatable) {
+      seg.translation = {
+        text: mark(seg.text.source),
+        engine: 'pseudo',
+        sourceLangUsed: seg.language.value,
+        targetLang: 'en-GB',
+        at: new Date().toISOString(),
+      };
+    }
   }
 
-  // writer → 訳 docx
   const out = await dtirToDocx(dtir, orig, { onMissingTranslation: 'error' });
-
   const docXml = await partText(out, 'word/document.xml');
   const headerXml = await partText(out, 'word/header1.xml');
   const footerXml = await partText(out, 'word/footer1.xml');
 
-  // 1. 訳文注入
+  const failures: string[] = [];
+  const ok = (c: boolean, m: string) => {
+    if (!c) failures.push(m);
+  };
+
+  // 訳文注入
   ok(docXml.includes(mark('Jaarverslag 2025')), '見出しの訳文が注入されていない');
   ok(
     docXml.includes(mark('Les résultats du premier trimestre dépassent les prévisions.')),
-    '仏語(ラン分断)の訳文が先頭ランに集約されていない',
+    '仏語(3ラン)の訳文が先頭ランに集約されていない',
   );
   ok(docXml.includes(mark('Die Produktion wurde im April vollständig automatisiert.')), '独語の訳文が注入されていない');
   ok(headerXml.includes(mark('Vertrouwelijk')), 'ヘッダの訳文が注入されていない');
 
-  // 2. 不可触: フィールドキャッシュ・数値・構造
-  ok(docXml.includes('Resultaten'), 'TOCフィールドのキャッシュが書き換えられた（不可触のはず）');
-  ok(docXml.includes('1.250.000'), '数値が書き換えられた（不可触のはず）');
+  // 不可触
+  ok(docXml.includes('Resultaten'), 'TOCフィールドのキャッシュが書き換えられた');
+  ok(docXml.includes('1.250.000'), '数値が書き換えられた');
   ok(docXml.includes('<w:sectPr'), 'sectPr が失われた（構造破壊）');
   ok(/PAGE/.test(footerXml), 'フッタの PAGE フィールドが失われた');
 
-  // 4+5. 再 reader で構造保持＋意味整合
-  const dtir2 = await docxToDtir(out, { fileName: 'out.docx' });
+  // collapse: 仏語の3ラン→先頭1本に集約し、残り2ランの w:t が空になる
+  ok(emptyWtCount(docXml) >= 2, `collapse で空ランが生成されていない（空 w:t=${emptyWtCount(docXml)}）`);
 
-  // 3. collapse（構造で検証）: 3ラン分断だった仏語段落が、訳注入後は
-  //    テキストランが1本に集約されている（残りは空になり reader が除外）。
-  const frBefore = dtir.segments.find((s) => s.text.source.includes('prévisions'));
-  const frAfter = dtir2.segments.find((s) => s.text.source.includes('prévisions'));
-  ok((frBefore?.anchor.ref as { runIds: string[] }).runIds.length === 3, '前提: 仏語は3ラン');
-  ok(
-    (frAfter?.anchor.ref as { runIds: string[] }).runIds.length === 1,
-    `collapse 後の仏語が1ランに集約されていない（runs=${(frAfter?.anchor.ref as { runIds: string[] })?.runIds.length}）`,
-  );
-  const ajv = new Ajv2020({ allErrors: true, strict: false });
-  addFormats(ajv);
-  const validate = ajv.compile(JSON.parse(readFileSync(schemaPath, 'utf8')));
-  ok(validate(dtir2) === true, '再 reader 出力が JSON Schema 不適合: ' + JSON.stringify(validate.errors?.slice(0, 2)));
-  ok(validateDtir(dtir2).length === 0, '再 reader 出力が validate-dtir 不適合');
-  const translatedSources = dtir2.segments.filter((s) => s.translatable).map((s) => s.text.source);
-  ok(translatedSources.every((s) => s.startsWith('EN〔')), '再 reader で訳文が原文位置に来ていない');
-  ok(dtir2.segments.length === dtir.segments.length, 'セグメント数が往復で変化（構造破壊）');
+  // valid zip
+  ok((await JSZip.loadAsync(out)).file('word/document.xml') !== null, '出力が valid docx zip でない');
 
-  // 6. LibreOffice 変換（Word 互換の妥当性）
+  // LibreOffice 変換（Word 互換）
   let pdfOk = false;
   try {
-    const dir = mkdtempSync(join(tmpdir(), 'rt-'));
+    const dir = mkdtempSync(join(tmpdir(), 'wa-'));
     const docxPath = join(dir, 'out.docx');
     writeFileSync(docxPath, out);
     execFileSync('soffice', ['--headless', '--convert-to', 'pdf', '--outdir', dir, docxPath], {
@@ -125,11 +94,11 @@ async function main(): Promise<void> {
   } catch {
     pdfOk = false;
   }
-  ok(pdfOk, 'LibreOffice が訳 docx を pdf 化できない（妥当性 NG）');
+  ok(pdfOk, 'LibreOffice が訳 docx を pdf 化できない');
 
   console.error('');
   if (failures.length === 0) {
-    console.error(GREEN(`ROUNDTRIP ALL PASS — ${expected.size} 段落を翻訳注入、構造・フィールド・数値を保持、Word 互換確認`));
+    console.error(GREEN('WRITER ACCEPTANCE PASS — 静的DTIRから訳文注入・構造保持・collapse・Word互換を確認'));
     process.exit(0);
   }
   console.error(RED(`FAIL — ${failures.length} 件`));

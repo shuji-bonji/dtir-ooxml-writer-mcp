@@ -14,7 +14,7 @@
  */
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import JSZip from 'jszip';
-import type { IRDocument, IRSegment } from './dtir.js';
+import type { IRDocument, IRSegment } from '@shuji-bonji/doc-translation-ir';
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
