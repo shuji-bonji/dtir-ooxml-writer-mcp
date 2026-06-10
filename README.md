@@ -46,7 +46,7 @@ const out = await dtirToDocx(translatedDtir, originalBuf, { onMissingTranslation
 ```sh
 git clone https://github.com/shuji-bonji/doc-translation-ir.git
 git clone https://github.com/shuji-bonji/dtir-ooxml-writer-mcp.git
-cd dtir-ooxml-writer-mcp && npm install && npm run build   # → dist/index.js
+cd dtir-ooxml-writer-mcp && npm install   # prepare で自動ビルド → dist/index.js（再ビルドは npm run build）
 ```
 
 ### Claude Desktop（`claude_desktop_config.json`）
