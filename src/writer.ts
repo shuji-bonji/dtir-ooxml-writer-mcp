@@ -109,6 +109,27 @@ function collapseTranslation(p: El, doc: Document, translation: string): void {
   }
 }
 
+/** ラン i の全 w:t のうち先頭へ text を入れ、残りを空にする（ラン内の書式は保持）。 */
+function setRunText(run: El, doc: Document, text: string): void {
+  let placed = false;
+  for (const wt of descendantsByTag(run, 'w:t')) {
+    setWtText(wt, doc, placed ? '' : text);
+    placed = true;
+  }
+}
+
+/**
+ * 脱collapse: translation.runTexts を段落のテキストラン（読み順）へ 1:1 で分配する。
+ * 各ランの rPr（太字・色・ハイパーリンク等）を保ったまま訳文を入れる。
+ * runTexts の数が段落のテキストラン数と一致する場合のみ true（不一致なら呼び出し側が collapse）。
+ */
+function distributeRuns(p: El, doc: Document, runTexts: string[]): boolean {
+  const runs = textRunsOf(p);
+  if (runs.length !== runTexts.length) return false;
+  runs.forEach((run, i) => setRunText(run, doc, runTexts[i]));
+  return true;
+}
+
 // --- メイン -----------------------------------------------------------------
 export async function dtirToDocx(
   dtir: IRDocument,
@@ -149,7 +170,11 @@ export async function dtirToDocx(
       if (p.tagName !== 'w:p') {
         throw new Error(`anchor.ref.path が w:p を指していない: ${path} (${seg.id})`);
       }
-      collapseTranslation(p, doc, (seg.translation as { text: string }).text);
+      const tr = seg.translation as { text: string; runTexts?: string[] };
+      // runTexts があり段落のテキストラン数と一致すれば各ランへ分配（書式保持）、
+      // 無い/不一致なら collapse（fail-safe）。
+      const distributed = tr.runTexts ? distributeRuns(p, doc, tr.runTexts) : false;
+      if (!distributed) collapseTranslation(p, doc, tr.text);
     }
 
     let out = new XMLSerializer().serializeToString(doc);
