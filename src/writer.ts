@@ -53,18 +53,44 @@ function setWtText(wt: El, doc: Document, text: string): void {
   }
 }
 
-/** 段落直下の、テキスト(w:t)を持つラン（読み順）。 */
+/**
+ * 段落内の、テキスト(w:t)を持つランを**読み順で再帰収集**。
+ * reader の collectRunEls と一致させる: w:hyperlink / w:ins / w:smartTag / w:sdt 内の
+ * run も対象、w:del（削除済み）配下は除外。collapse の対象ランを過不足なく拾うため。
+ */
 function textRunsOf(p: El): El[] {
-  return childElements(p)
-    .filter((e) => e.tagName === 'w:r')
-    .filter((r) => descendantsByTag(r, 'w:t').length > 0);
+  const out: El[] = [];
+  const walk = (el: El): void => {
+    for (const c of childElements(el)) {
+      if (c.tagName === 'w:del') continue;
+      if (c.tagName === 'w:r') {
+        if (descendantsByTag(c, 'w:t').length > 0) out.push(c);
+        continue;
+      }
+      walk(c);
+    }
+  };
+  walk(p);
+  return out;
 }
 
-/** path 例: /w:body/w:p[12] → { container:'w:body', index:12 }。 */
-function parsePath(path: string): { container: string; index: number } | null {
-  const m = /^\/(w:\w+)\/w:p\[(\d+)\]$/.exec(path);
-  if (!m) return null;
-  return { container: m[1], index: Number(m[2]) };
+/**
+ * part ルート（documentElement）からの構造パスをたどって要素を得る汎用ナビゲータ。
+ * 各セグメントは `tag[idx]`（同名兄弟内 1 始まり）で、reader の collectParagraphs と一致する。
+ * 例: /w:body[1]/w:tbl[1]/w:tr[2]/w:tc[1]/w:p[1]、/w:footnote[3]/w:p[1]、/w:p[1]
+ */
+function navigatePath(doc: Document, path: string): El | null {
+  const segs = path.split('/').filter((s) => s.length > 0);
+  let cur: El | null = doc.documentElement as unknown as El | null;
+  for (const seg of segs) {
+    if (!cur) return null;
+    const m = /^([\w:]+)\[(\d+)\]$/.exec(seg);
+    if (!m) return null;
+    const tag = m[1];
+    const idx = Number(m[2]);
+    cur = childElements(cur).filter((e) => e.tagName === tag)[idx - 1] ?? null;
+  }
+  return cur;
 }
 
 /** collapse: 訳文を先頭 w:t に入れ、残り w:t を空にする。 */
@@ -118,15 +144,11 @@ export async function dtirToDocx(
 
     for (const seg of segs) {
       const path = (seg.anchor.ref as { path?: string }).path ?? '';
-      const parsed = parsePath(path);
-      if (!parsed) throw new Error(`anchor.ref.path を解釈できない: ${path} (${seg.id})`);
-      const container = doc.getElementsByTagName(parsed.container).item(0);
-      if (!container) throw new Error(`container ${parsed.container} が無い: ${part}`);
-      const paragraphs = childElements(container as unknown as El).filter(
-        (e) => e.tagName === 'w:p',
-      );
-      const p = paragraphs[parsed.index - 1];
+      const p = navigatePath(doc, path);
       if (!p) throw new Error(`段落が見つからない: ${path} (${seg.id})`);
+      if (p.tagName !== 'w:p') {
+        throw new Error(`anchor.ref.path が w:p を指していない: ${path} (${seg.id})`);
+      }
       collapseTranslation(p, doc, (seg.translation as { text: string }).text);
     }
 

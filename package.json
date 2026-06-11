@@ -24,6 +24,7 @@
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:roundtrip": "tsx test/roundtrip.ts",
+    "test:torture": "tsx test/torture-roundtrip.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
