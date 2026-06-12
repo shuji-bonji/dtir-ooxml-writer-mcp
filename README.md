@@ -1,3 +1,5 @@
+**日本語** | [English](./README.en.md)
+
 # @shuji-bonji/dtir-ooxml-writer-mcp
 
 翻訳済み **DTIR** ＋ 元 `.docx` から訳 `.docx` を生成する MCP サーバ。`dtir-ooxml-reader-mcp` と対。
